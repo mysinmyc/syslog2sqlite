@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	flag_Listen                = flag.String("listen", "0.0.0.0:8080", "Listening address")
+	flag_Listen                = flag.String("listen", "0.0.0.0:41514", "Listening address")
 	flag_Debug                 = flag.Bool("debug", false, "Enable debug")
 	flag_Db_Path                = flag.String("db_path", "", "DB PATH")
 	flag_Archive_Dir           = flag.String("archive_dir", "", "Directory where to move archived db")

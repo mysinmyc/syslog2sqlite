@@ -5,6 +5,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mysinmyc/gocommons/db"
 	"github.com/mysinmyc/gocommons/diagnostic"
+	"github.com/mysinmyc/gocommons/myfileutils"
 	"os"
 	"path"
 	"strings"
@@ -95,7 +96,7 @@ func (vSelf *EventStoreSqlLite) GetStartTime() (time.Time, error) {
 		return vSelf.startTime, nil
 	}
 
-	vTimestampResultSet, vTimestampResultSetError := vSelf.dbHelper.Query("select min("+FIELD_TIMESTAMP+") from " + TABLE_SYSLOG)
+	vTimestampResultSet, vTimestampResultSetError := vSelf.dbHelper.Query("select min(" + FIELD_TIMESTAMP + ") from " + TABLE_SYSLOG)
 	if vTimestampResultSetError != nil {
 		return time.Time{}, diagnostic.NewError("Error executing StartTime query", vTimestampResultSetError)
 	}
@@ -116,18 +117,16 @@ func (vSelf *EventStoreSqlLite) GetStartTime() (time.Time, error) {
 		return time.Now(), nil
 	}
 
-	vMinTime,vMinTimeError:=db.SqlLiteTimestamp(vMinTimeRaw).Time()
+	vMinTime, vMinTimeError := db.SqlLiteTimestamp(vMinTimeRaw).Time()
 	if vMinTimeError != nil {
 		return time.Now(), diagnostic.NewError("Error parsing StartTimeRaw", vMinTimeError)
-	}	
+	}
 
 	diagnostic.LogDebug("EventStoreSqlLite.GetStartTime", "Loaded startime from db: %v", vMinTime)
-	vSelf.startTime=vMinTime
-	
+	vSelf.startTime = vMinTime
+
 	return vSelf.startTime, nil
 }
-
-
 
 func (vSelf *EventStoreSqlLite) Start(pChannel chan *input.Event) error {
 	diagnostic.LogInfo("EventStoreSqlLite.Start", "Starting eventstore into %s...", vSelf.dbPath)
@@ -181,7 +180,7 @@ func (vSelf *EventStoreSqlLite) committerLoop() {
 }
 
 func (vSelf *EventStoreSqlLite) archiveLoop() {
-	vTimeoutChannel := time.After(archiveCheckIntervalSeconds)
+	vTimeoutChannel := time.After(5)
 	for {
 		select {
 		case <-vSelf.stopChannel:
@@ -218,47 +217,59 @@ func (vSelf *EventStoreSqlLite) Stop() error {
 
 }
 
-func getArchiveFile(pSourceFile, pArchiveDir string) string {
-
-	vTargetDir := pArchiveDir
-	if vTargetDir == "" {
-		vTargetDir = path.Dir(pSourceFile)
-	}
+func getArchiveFile(pSourceFile string) string {
 
 	vExtension := path.Ext(pSourceFile)
 	vFileName := strings.TrimSuffix(path.Base(pSourceFile), vExtension) + "_" + time.Now().Format("2006-01-02_150405") + vExtension
-	return vTargetDir + "/" + vFileName
+	return vFileName
 
 }
 
-func (vSelf *EventStoreSqlLite) Archive() error {
-	vTargetFile := getArchiveFile(vSelf.dbPath, vSelf.options.ArchiveDir)
+func (vSelf *EventStoreSqlLite) Archive() (vReturnedError error) {
+	vTargetFile := getArchiveFile(vSelf.dbPath)
+	vCurrentDir := path.Dir(vSelf.dbPath)
 
-	diagnostic.LogInfo("EventStoreSqlLite.Archive", "Requested to archive %s into %s", vSelf.dbPath, vTargetFile)
+	diagnostic.LogInfo("EventStoreSqlLite.Archive", "Started to archive %s into %s", vSelf.dbPath, vTargetFile)
 	vSelf.mutex.Lock()
 	defer vSelf.mutex.Unlock()
 
 	diagnostic.LogDebug("EventStoreSqlLite.Archive", "closing db...")
 	if vError := vSelf.sqlInsert.Close(); vError != nil {
-		return diagnostic.NewError("An error occurred while terminating db insert", vError)
+		vReturnedError = diagnostic.NewError("An error occurred while terminating db insert", vError)
 	}
 
-	if vError := vSelf.dbHelper.Close(); vError != nil {
-		return diagnostic.NewError("An error occurred while closing db helper", vError)
+	if vReturnedError == nil {
+		if vError := vSelf.dbHelper.Close(); vError != nil {
+			vReturnedError = diagnostic.NewError("An error occurred while closing db helper", vError)
+		}
 	}
 
-	diagnostic.LogDebug("EventStoreSqlLite.Archive", "moving old file...")
-	if vError := os.Rename(vSelf.dbPath, vTargetFile); vError != nil {
-		return diagnostic.NewError("An error occurred while moving file", vError)
+	if vReturnedError == nil {
+		diagnostic.LogDebug("EventStoreSqlLite.Archive", "Rename database file...")
+		if vError := os.Rename(vSelf.dbPath, vCurrentDir+"/"+vTargetFile); vError != nil {
+			vReturnedError = diagnostic.NewError("An error occurred while renaming file", vError)
+		}
+	}
+
+	if vSelf.options.ArchiveDir != "" && vSelf.options.ArchiveDir != vCurrentDir {
+		diagnostic.LogInfo("EventStoreSqlLite.Archive", "Moving file %s from %s into archive dir %s...", vTargetFile, vCurrentDir, vSelf.options.ArchiveDir)
+		if vError := myfileutils.SafeMoveFile(vCurrentDir+"/"+vTargetFile, vSelf.options.ArchiveDir+"/"+vTargetFile); vError != nil {
+			vReturnedError = diagnostic.NewError("An error occurred while moving %s into archivedir %s", vError, vCurrentDir+"/"+vTargetFile, vSelf.options.ArchiveDir)
+		}
 	}
 
 	diagnostic.LogDebug("EventStoreSqlLite.Archive", "initializing db...")
 	if vError := vSelf.initDb(); vError != nil {
-		return diagnostic.NewError("An error occurred while moving file", vError)
+		diagnostic.LogFatal("EventStoreSqlLite.Archive", "failed to initalized db after archive", vError)
 	}
 
-	diagnostic.LogInfo("EventStoreSqlLite.Archive", "Archive succeded")
-	return nil
+	if vReturnedError == nil {
+		diagnostic.LogInfo("EventStoreSqlLite.Archive", "Archive succeded")
+	} else {
+		diagnostic.LogError("EventStoreSqlLite.Archive", "Archive failed", vReturnedError)
+	}
+
+	return
 }
 
 func (vSelf *EventStoreSqlLite) archiveTresholdsReached() (bool, error) {
@@ -271,7 +282,7 @@ func (vSelf *EventStoreSqlLite) archiveTresholdsReached() (bool, error) {
 		return true, nil
 	}
 
-	if vSelf.options.MaxAge > 0 && vSelf.startTime.Add(vSelf.options.MaxAge).After(time.Now()) == false {
+	if vSelf.options.MaxAge > 0 && vSelf.startTime.IsZero() == false && vSelf.startTime.Add(vSelf.options.MaxAge).After(time.Now()) == false {
 		return true, nil
 	}
 

@@ -89,7 +89,7 @@ func xxxTest_Collector(t *testing.T) {
 }
 
 func IsNow(pTime time.Time) bool {
-	vDiff:=pTime.Unix()-time.Now().Unix()
+	vDiff := pTime.Unix() - time.Now().Unix()
 	if vDiff < 0 {
 		return vDiff > -10
 	} else {
@@ -113,9 +113,9 @@ func Test_Archive(t *testing.T) {
 	}
 	log.Printf("Empty start time: %s, isnow:%v", vEmptyStartTime, IsNow(vEmptyStartTime))
 
-	vTestTimeStamp,_:= time.Parse("2006-01-02","2006-01-02")
-	_,vInsertError:= vEventStore.DbHelper().Exec("insert into "+TABLE_SYSLOG+"("+FIELD_TIMESTAMP+") values(?)",vTestTimeStamp)
-	if vInsertError !=nil {
+	vTestTimeStamp, _ := time.Parse("2006-01-02", "2006-01-02")
+	_, vInsertError := vEventStore.DbHelper().Exec("insert into "+TABLE_SYSLOG+"("+FIELD_TIMESTAMP+") values(?)", vTestTimeStamp)
+	if vInsertError != nil {
 		t.Fatalf("failed to insert timestamp", vInsertError)
 	}
 
